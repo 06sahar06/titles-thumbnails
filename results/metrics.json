@@ -1,0 +1,97 @@
+{
+  "history": [
+    {
+      "model": "distilbert-base-uncased",
+      "stage": "test",
+      "metrics": {
+        "accuracy": 0.9970394128168754,
+        "f1_macro": 0.5377202028218275,
+        "precision": 0.9970390475602986,
+        "recall": 1.0,
+        "auc_roc": 0.9041935284291284
+      },
+      "timestamp_utc": "2026-05-07T18:02:47.546161+00:00"
+    },
+    {
+      "model": "distilbert-base-uncased",
+      "stage": "test",
+      "metrics": {
+        "accuracy": 0.9970394128168754,
+        "f1_macro": 0.5377202028218275,
+        "precision": 0.9970390475602986,
+        "recall": 1.0,
+        "auc_roc": 0.9041935284291284
+      },
+      "timestamp_utc": "2026-05-07T18:08:08.966958+00:00"
+    },
+    {
+      "model": "distilbert-base-uncased",
+      "stage": "validation",
+      "step": 8107,
+      "epoch": 1.0,
+      "metrics": {
+        "eval_loss": 0.014152893796563148,
+        "eval_accuracy": 0.9969775474956822,
+        "eval_f1_macro": 0.49924324324324326,
+        "eval_precision": 0.9969775474956822,
+        "eval_recall": 1.0,
+        "eval_auc_roc": 0.942223167804522,
+        "eval_runtime": 386.2152,
+        "eval_samples_per_second": 41.977,
+        "eval_steps_per_second": 2.625,
+        "epoch": 1.0
+      },
+      "timestamp_utc": "2026-05-08T09:35:09.250065+00:00"
+    },
+    {
+      "model": "distilbert-base-uncased",
+      "stage": "validation",
+      "step": 16214,
+      "epoch": 2.0,
+      "metrics": {
+        "eval_loss": 0.012999683618545532,
+        "eval_accuracy": 0.9971625956081914,
+        "eval_f1_macro": 0.5733635396285999,
+        "eval_precision": 0.9972234219781576,
+        "eval_recall": 0.9999381302975933,
+        "eval_auc_roc": 0.9578926169242676,
+        "eval_runtime": 382.3826,
+        "eval_samples_per_second": 42.397,
+        "eval_steps_per_second": 2.652,
+        "epoch": 2.0
+      },
+      "timestamp_utc": "2026-05-08T12:02:15.048394+00:00"
+    },
+    {
+      "model": "distilbert-base-uncased",
+      "stage": "validation",
+      "step": 24321,
+      "epoch": 3.0,
+      "metrics": {
+        "eval_loss": 0.012454493902623653,
+        "eval_accuracy": 0.9971009129040217,
+        "eval_f1_macro": 0.5869932501101675,
+        "eval_precision": 0.9972846210812145,
+        "eval_recall": 0.9998143908927798,
+        "eval_auc_roc": 0.9585769715917054,
+        "eval_runtime": 376.7244,
+        "eval_samples_per_second": 43.034,
+        "eval_steps_per_second": 2.692,
+        "epoch": 3.0
+      },
+      "timestamp_utc": "2026-05-08T14:47:19.199037+00:00"
+    },
+    {
+      "model": "distilbert-base-uncased",
+      "stage": "test",
+      "metrics": {
+        "accuracy": 0.9971010917165237,
+        "f1_macro": 0.5558778600149554,
+        "precision": 0.9971005552128316,
+        "recall": 1.0,
+        "auc_roc": 0.9044929777887768
+      },
+      "timestamp_utc": "2026-05-08T14:53:55.028747+00:00"
+    }
+  ]
+}

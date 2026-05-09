@@ -1,0 +1,11 @@
+transformers>=4.35.0
+datasets
+peft
+accelerate
+torch
+torchvision
+Pillow
+scikit-learn
+tqdm
+requests
+numpy
