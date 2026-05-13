@@ -22,6 +22,9 @@ RESULTS_DIR = ROOT_DIR / "results"
 CHECKPOINTS_DIR = ROOT_DIR / "checkpoints"
 THUMBNAIL_DIRS = [DATA_DIR / "clickbait_thumbnails", DATA_DIR / "non_clickbait_thumbnails"]
 
+# Canonical path where the split videoIDs are stored after the first training run.
+SPLIT_INDICES_PATH = RESULTS_DIR / "split_indices.json"
+
 
 def sanitize_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip()) or "model"
@@ -49,18 +52,11 @@ def stratified_split(
     indices = np.arange(len(dataset))
 
     train_indices, temp_indices = train_test_split(
-        indices,
-        test_size=0.2,
-        random_state=seed,
-        stratify=labels,
+        indices, test_size=0.2, random_state=seed, stratify=labels,
     )
-
     temp_labels = labels[temp_indices]
     validation_indices, test_indices = train_test_split(
-        temp_indices,
-        test_size=0.5,
-        random_state=seed,
-        stratify=temp_labels,
+        temp_indices, test_size=0.5, random_state=seed, stratify=temp_labels,
     )
 
     return DatasetDict(
@@ -68,6 +64,70 @@ def stratified_split(
         validation=dataset.select(sorted(validation_indices.tolist())),
         test=dataset.select(sorted(test_indices.tolist())),
     )
+
+
+def save_split_indices(
+    split: DatasetDict,
+    path: Path,
+    id_column: str = "videoID",
+) -> None:
+    """
+    Save the videoIDs for each split to a JSON file so every script
+    can reconstruct the exact same train/val/test partition.
+    Called once by train_text_lora.py after the first split.
+    """
+    indices = {
+        split_name: split[split_name][id_column]
+        for split_name in ("train", "validation", "test")
+    }
+    ensure_parent(path)
+    path.write_text(json.dumps(indices, indent=2), encoding="utf-8")
+    sizes = {k: len(v) for k, v in indices.items()}
+    print(f"Saved canonical split indices to {path}  {sizes}")
+
+
+def load_split_by_ids(
+    dataset: Dataset,
+    split_path: Path,
+    id_column: str = "videoID",
+) -> DatasetDict:
+    """
+    Reconstruct train/val/test splits from the saved videoID lists.
+    Videos not found in the current dataset (e.g. thumbnails CSV is a
+    subset of titles CSV) are silently skipped.
+    """
+    saved = json.loads(split_path.read_text(encoding="utf-8"))
+    id_to_idx: dict[str, int] = {
+        str(row[id_column]): i for i, row in enumerate(dataset)
+    }
+    result: dict[str, Dataset] = {}
+    for split_name, ids in saved.items():
+        selected = [id_to_idx[str(vid)] for vid in ids if str(vid) in id_to_idx]
+        result[split_name] = dataset.select(selected)
+        print(f"  {split_name}: {len(selected)}/{len(ids)} videos matched from saved split")
+    return DatasetDict(**result)
+
+
+def get_split(
+    dataset: Dataset,
+    split_indices_path: Path,
+    seed: int = 42,
+    label_column: str = "is_clickbait",
+) -> DatasetDict:
+    """
+    Convenience wrapper used by every script except train_text_lora.py:
+    - If split_indices.json exists  -> load canonical split from it.
+    - Otherwise                     -> fall back to fresh stratified split + warn.
+    """
+    resolved = resolve_project_path(split_indices_path)
+    if resolved.exists():
+        print(f"Loading canonical split from {resolved}")
+        return load_split_by_ids(dataset, resolved)
+    print(
+        f"WARNING: {resolved} not found — generating a fresh stratified split. "
+        "Run train_text_lora.py first to create the canonical split."
+    )
+    return stratified_split(dataset, label_column=label_column, seed=seed)
 
 
 def compute_binary_metrics(logits: np.ndarray, labels: np.ndarray) -> dict[str, float]:
@@ -97,7 +157,6 @@ def _softmax(logits: np.ndarray) -> np.ndarray:
 
 def append_metrics_record(metrics_path: Path, record: dict[str, Any]) -> None:
     ensure_parent(metrics_path)
-    existing: dict[str, Any]
     if metrics_path.exists():
         try:
             existing = json.loads(metrics_path.read_text(encoding="utf-8"))
@@ -111,11 +170,7 @@ def append_metrics_record(metrics_path: Path, record: dict[str, Any]) -> None:
         history = []
 
     history.append(_json_safe({**record, "timestamp_utc": datetime.now(timezone.utc).isoformat()}))
-
-    payload = {
-        **existing,
-        "history": history,
-    }
+    payload = {**existing, "history": history}
     metrics_path.write_text(json.dumps(_json_safe(payload), indent=2, ensure_ascii=False), encoding="utf-8")
 
 
@@ -186,10 +241,11 @@ def chat_completion(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
-
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
+        "HTTP-Referer": "https://colab.research.google.com",
+        "X-Title": "clickbait-detector",
     }
     if extra_headers:
         headers.update(extra_headers)
