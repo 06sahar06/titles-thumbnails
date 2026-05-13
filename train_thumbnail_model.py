@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 from pathlib import Path
 
 import numpy as np
@@ -11,8 +10,16 @@ from torch.utils.data import DataLoader
 from torchvision.models import ResNet50_Weights, resnet50
 from tqdm import tqdm
 
-from clickbait_common import CHECKPOINTS_DIR, RESULTS_DIR, append_metrics_record, compute_binary_metrics, load_csv_dataset, sanitize_name, stratified_split
-from clickbait_common import resolve_project_path
+from clickbait_common import (
+    CHECKPOINTS_DIR,
+    RESULTS_DIR,
+    SPLIT_INDICES_PATH,
+    append_metrics_record,
+    compute_binary_metrics,
+    get_split,
+    load_csv_dataset,
+    resolve_project_path,
+)
 from clickbait_vision import ThumbnailDataset
 
 
@@ -21,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--csv", type=Path, default=Path("thumbnails & titles") / "prepared_dataset_thumbnails.csv")
     parser.add_argument("--output-dir", type=Path, default=CHECKPOINTS_DIR / "resnet50_thumbnail")
     parser.add_argument("--results-path", type=Path, default=RESULTS_DIR / "metrics.json")
+    parser.add_argument("--split-indices-path", type=Path, default=SPLIT_INDICES_PATH)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=5)
@@ -33,13 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_model(freeze_backbone: bool) -> nn.Module:
-    weights = ResNet50_Weights.DEFAULT
-    model = resnet50(weights=weights)
+    model = resnet50(weights=ResNet50_Weights.DEFAULT)
     if freeze_backbone:
         for parameter in model.parameters():
             parameter.requires_grad = False
-    in_features = model.fc.in_features
-    model.fc = nn.Linear(in_features, 2)
+    model.fc = nn.Linear(model.fc.in_features, 2)
     return model
 
 
@@ -56,8 +62,7 @@ def make_loaders(split, batch_size: int, image_size: int, num_workers: int):
 
 def run_epoch(model, loader, criterion, optimizer, device, train: bool):
     model.train(train)
-    all_logits = []
-    all_labels = []
+    all_logits, all_labels = [], []
     running_loss = 0.0
 
     progress = tqdm(loader, desc="train" if train else "eval", leave=False)
@@ -78,9 +83,9 @@ def run_epoch(model, loader, criterion, optimizer, device, train: bool):
         all_labels.append(labels.detach().cpu().numpy())
         progress.set_postfix(loss=float(loss.item()))
 
-    logits = np.concatenate(all_logits, axis=0)
-    labels = np.concatenate(all_labels, axis=0)
-    metrics = compute_binary_metrics(logits, labels)
+    logits_arr = np.concatenate(all_logits, axis=0)
+    labels_arr = np.concatenate(all_labels, axis=0)
+    metrics = compute_binary_metrics(logits_arr, labels_arr)
     metrics["loss"] = running_loss / max(len(loader.dataset), 1)
     return metrics
 
@@ -100,16 +105,26 @@ def main() -> None:
     np.random.seed(args.seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
     csv_path = resolve_project_path(args.csv)
     dataset = load_csv_dataset(csv_path)
-    split = stratified_split(dataset, seed=args.seed)
-    train_loader, validation_loader, test_loader = make_loaders(split, args.batch_size, args.image_size, args.num_workers)
+
+    # Use canonical split so test set matches all other scripts
+    split = get_split(dataset, args.split_indices_path, seed=args.seed)
+
+    train_loader, validation_loader, test_loader = make_loaders(
+        split, args.batch_size, args.image_size, args.num_workers
+    )
 
     model = build_model(args.freeze_backbone).to(device)
     sanity_check(model, train_loader, device)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW((parameter for parameter in model.parameters() if parameter.requires_grad), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = torch.optim.AdamW(
+        (p for p in model.parameters() if p.requires_grad),
+        lr=args.lr, weight_decay=args.weight_decay,
+    )
 
     output_dir = resolve_project_path(args.output_dir)
     results_path = resolve_project_path(args.results_path)
@@ -121,43 +136,28 @@ def main() -> None:
     for epoch in range(1, args.epochs + 1):
         train_metrics = run_epoch(model, train_loader, criterion, optimizer, device, train=True)
         validation_metrics = run_epoch(model, validation_loader, criterion, optimizer, device, train=False)
-        append_metrics_record(
-            results_path,
-            {
-                "model": "resnet50_thumbnail",
-                "stage": "validation",
-                "epoch": epoch,
-                "metrics": {"train": train_metrics, "validation": validation_metrics},
-            },
-        )
+        append_metrics_record(results_path, {
+            "model": "resnet50_thumbnail", "stage": "validation", "epoch": epoch,
+            "metrics": {"train": train_metrics, "validation": validation_metrics},
+        })
         print(f"Epoch {epoch} train: {train_metrics}")
         print(f"Epoch {epoch} validation: {validation_metrics}")
 
         if validation_metrics["f1_macro"] > best_f1:
             best_f1 = validation_metrics["f1_macro"]
-            torch.save(
-                {
-                    "model_state_dict": model.state_dict(),
-                    "epoch": epoch,
-                    "validation_metrics": validation_metrics,
-                    "args": vars(args),
-                },
-                best_path,
-            )
+            torch.save({
+                "model_state_dict": model.state_dict(), "epoch": epoch,
+                "validation_metrics": validation_metrics, "args": vars(args),
+            }, best_path)
 
     if best_path.exists():
-        checkpoint = torch.load(best_path, map_location=device)
+        checkpoint = torch.load(best_path, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint["model_state_dict"])
 
     test_metrics = run_epoch(model, test_loader, criterion, optimizer, device, train=False)
-    append_metrics_record(
-        results_path,
-        {
-            "model": "resnet50_thumbnail",
-            "stage": "test",
-            "metrics": test_metrics,
-        },
-    )
+    append_metrics_record(results_path, {
+        "model": "resnet50_thumbnail", "stage": "test", "metrics": test_metrics,
+    })
     print(f"Test metrics: {test_metrics}")
 
 
