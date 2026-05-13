@@ -11,8 +11,15 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import CLIPModel, CLIPProcessor
 
-from clickbait_common import RESULTS_DIR, append_metrics_record, load_csv_dataset, sanitize_name, stratified_split
-from clickbait_common import resolve_project_path
+from clickbait_common import (
+    RESULTS_DIR,
+    SPLIT_INDICES_PATH,
+    append_metrics_record,
+    get_split,
+    load_csv_dataset,
+    resolve_project_path,
+    sanitize_name,
+)
 from clickbait_vision import ThumbnailDataset
 
 
@@ -28,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--results-path", type=Path, default=RESULTS_DIR / "metrics.json")
+    parser.add_argument("--split-indices-path", type=Path, default=SPLIT_INDICES_PATH)
+    parser.add_argument("--seed", type=int, default=42)
     return parser
 
 
@@ -52,7 +61,7 @@ def sanity_check(model, processor, loader, device: torch.device) -> None:
     sample = next(iter(loader))
     image = Image.open(sample["image_path"][0]).convert("RGB")
     inputs = processor(text=PROMPTS, images=image, return_tensors="pt", padding=True)
-    inputs = {key: value.to(device) for key, value in inputs.items()}
+    inputs = {k: v.to(device) for k, v in inputs.items()}
     model.eval()
     with torch.no_grad():
         outputs = model(**inputs)
@@ -62,10 +71,13 @@ def sanity_check(model, processor, loader, device: torch.device) -> None:
 def main() -> None:
     args = build_parser().parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
     csv_path = resolve_project_path(args.csv)
     dataset = load_csv_dataset(csv_path)
-    split = stratified_split(dataset)
+
+    # Use canonical split so test set matches all other scripts
+    split = get_split(dataset, args.split_indices_path, seed=args.seed)
     rows = split[args.split].to_pandas().to_dict(orient="records")
 
     thumbnail_dataset = ThumbnailDataset(rows, image_size=args.image_size, train=False)
@@ -80,7 +92,7 @@ def main() -> None:
     for batch in tqdm(loader, desc=f"CLIP zero-shot ({args.split})"):
         images = [Image.open(path).convert("RGB") for path in batch["image_path"]]
         inputs = processor(text=PROMPTS, images=images, return_tensors="pt", padding=True)
-        inputs = {key: value.to(device) for key, value in inputs.items()}
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         with torch.no_grad():
             outputs = model(**inputs)
         all_logits.append(outputs.logits_per_image.detach().cpu().numpy())
@@ -88,14 +100,12 @@ def main() -> None:
 
     logits = np.concatenate(all_logits, axis=0)
     metrics = compute_metrics(logits, np.asarray(labels, dtype=int))
-    append_metrics_record(
-        args.results_path,
-        {
-            "model": sanitize_name(args.model_name),
-            "stage": f"clip_zero_shot_{args.split}",
-            "metrics": metrics,
-        },
-    )
+    results_path = resolve_project_path(args.results_path)
+    append_metrics_record(results_path, {
+        "model": sanitize_name(args.model_name),
+        "stage": f"clip_zero_shot_{args.split}",
+        "metrics": metrics,
+    })
     print(f"Metrics: {metrics}")
 
 
